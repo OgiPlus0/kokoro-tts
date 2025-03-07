@@ -1306,4 +1306,73 @@ if __name__ == "__main__":
                          speed=speed, lang=lang, split_output=split_output, 
                          format=format, debug=debug)
 
-runpod.serverless.start({"input": convert_text_to_audio})
+
+
+import runpod
+import base64
+
+def handler(job):
+    """RunPod serverless handler that wraps convert_text_to_audio."""
+    global stop_spinner, stop_audio
+    stop_spinner = False
+    stop_audio = False
+
+    # Extract job input
+    job_input = job["input"]
+    input_text = job_input.get("text")  # Expect text directly instead of a file
+    voice = job_input.get("voice", "af_sarah")  # Default voice
+    speed = job_input.get("speed", 1.0)
+    lang = job_input.get("lang", "en-us")
+    format = job_input.get("format", "mp3")  # Default to mp3 for serverless
+    debug = job_input.get("debug", False)
+
+    if not input_text:
+        return {"error": "No input text provided"}
+
+    # Since serverless can't write files locally, we'll process in-memory
+    kokoro = Kokoro("kokoro-v1.0.onnx", "voices-v1.0.bin")
+    lang = validate_language(lang, kokoro)
+    voice = validate_voice(voice, kokoro)
+
+    # Treat input as a single "chapter" for compatibility
+    chapters = [{"title": "Input", "content": input_text}]
+    all_samples = []
+    sample_rate = None
+
+    for chapter in chapters:
+        chunks = chunk_text(chapter["content"], initial_chunk_size=1000)
+        for chunk_num, chunk in enumerate(chunks, 1):
+            if stop_audio:
+                break
+            samples, sr = process_chunk_sequential(chunk, kokoro, voice, speed, lang, 0, debug)
+            if samples is not None:
+                if sample_rate is None:
+                    sample_rate = sr
+                all_samples.extend(samples)
+
+    if not all_samples:
+        return {"error": "Failed to generate audio"}
+
+    # Convert to base64 for RunPod output
+    import io
+    import soundfile as sf
+    output_buffer = io.BytesIO()
+    sf.write(output_buffer, all_samples, sample_rate, format=format)
+    audio_data = base64.b64encode(output_buffer.getvalue()).decode("utf-8")
+    output_buffer.close()
+
+    return {"output": {"audio": audio_data, "format": format, "sample_rate": sample_rate}}
+
+if __name__ == "__main__":
+    # Keep CLI functionality for local use
+    if len(sys.argv) > 1 and sys.argv[1] not in ["--serverless"]:
+        # Your existing CLI logic
+        # [Copy your if __name__ == "__main__": block here]
+        valid_options = get_valid_options()
+        # ... (rest of your CLI parsing logic)
+        convert_text_to_audio(input_file, output_file, voice=voice, stream=stream,
+                             speed=speed, lang=lang, split_output=split_output,
+                             format=format, debug=debug)
+    else:
+        # Run as serverless worker
+        runpod.serverless.start({"handler": handler})
