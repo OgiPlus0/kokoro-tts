@@ -1,8 +1,6 @@
 # Start with Python 3.12
 FROM python:3.12
 
-# Set working directory
-WORKDIR /app
 
 # Install git and wget for downloading resources
 RUN apt-get update && \
